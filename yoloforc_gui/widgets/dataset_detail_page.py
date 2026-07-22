@@ -144,7 +144,6 @@ class DatasetDetailPage(QWidget):
             self.refresh()
 
     def _open_uuid_viewer(self, row: int):
-        """Action 列の VIEW ボタンがクリックされた"""
         idx = self._model.index(row, 0)
         uuid = idx.data()
         detail = self.bridge.get_uuid_detail(self.dataset_name, uuid)
@@ -154,23 +153,26 @@ class DatasetDetailPage(QWidget):
 
         paths = detail.get("files")
         if not paths or not paths.get("images"):
-            QMessageBox.warning(self, "エラー", "画像ファイル情報がありません。")
+            QMessageBox.warning(self, "エラー", "ファイル情報がありません。")
             return
 
         from pathlib import Path
 
-        # str / Path の両方に対応
         first_img = Path(paths["images"][0])
         first_lbl = Path(paths["labels"][0]) if paths.get("labels") else None
 
-        # パスがファイルなら親ディレクトリ、既にディレクトリならそのまま
         img_dir = str(first_img.parent if first_img.is_file() else first_img)
         lbl_dir = str(first_lbl.parent if (first_lbl and first_lbl.is_file()) else (first_lbl or ""))
+
+        # dataset.yaml からクラス名を取得
+        meta = self.bridge.get_dataset_meta(self.dataset_name)
+        class_names = meta.get("classes", []) if meta else []
 
         dlg = UUIDViewerDialog(
             uuid=uuid,
             image_dir=img_dir,
             labels_dir=lbl_dir,
+            class_names=class_names,  # ← 追加
             parent=self,
         )
         dlg.exec()
