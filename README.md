@@ -97,3 +97,27 @@ yfc.export_yolo_ready(
     filter_tags=["approved"]
 )
 ```
+
+
+
+### pyside6のgui
+
+
+```
+yoloforc_gui/             # 新規PySide6アプリ
+    ├── main.py
+    ├── app.py
+    ├── core/
+    │   ├── __init__.py
+    │   └── bridge.py
+    ├── models/
+    │   ├── __init__.py
+    │   └── view_models.py
+    └── widgets/
+        ├── __init__.py
+        ├── main_window.py
+        ├── dataset_list_page.py
+        ├── dataset_detail_page.py
+        ├── import_wizard.py
+        └── drop_zone.py
+```
