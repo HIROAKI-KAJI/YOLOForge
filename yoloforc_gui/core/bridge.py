@@ -4,7 +4,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
-from PySide6.QtWidgets import QFileDialog, QMessageBox
+from PySide6.QtWidgets import QMessageBox
 
 from YoloForC import YoloForC
 from YoloForC.exceptions import YFCError
@@ -19,65 +19,42 @@ class YFCBridge:
         self.parent = parent_widget
         self._yfc: Optional[YoloForC] = None
         self._root_path: Optional[Path] = None
+        
+        # 起動時は未接続状態を正とする
         self.ready = False
 
-        self._resolve_root()
-        if self._root_path:
-            try:
-                self._yfc = YoloForC(root=self._root_path)
-                self.ready = True
-            except Exception as e:
-                QMessageBox.critical(self.parent, "接続エラー", str(e))
+    def initialize_root(self, path_str: str) -> bool:
+        """
+        GUI（Welcome Dashboard等）から指定されたパスで YoloForC を初期化する。
+        未初期化フォルダの場合は、自動的にルート初期化（.yoloforc_rootの生成）を行う。
+        """
+        p = Path(path_str).resolve()
+        
+        try:
+            # 指定されたパスがルートマーカーを持っていない場合は初期化（新規作成）
+            if not RootInitializer.is_initialized(p):
+                YoloForC.init_root(p)
+            
+            # YoloForCバックエンドのインスタンス生成
+            self._yfc = YoloForC(root=p)
+            self._root_path = p
+            self.ready = True
+            return True
+        except Exception as e:
+            QMessageBox.critical(self.parent, "接続エラー", f"ワークスペースの初期化に失敗しました:\n{e}")
+            self.ready = False
+            self._yfc = None
+            self._root_path = None
+            return False
 
     # --- 内部ヘルパー ---
 
-    def _resolve_root(self):
-        """環境変数 > ダイアログ選択/作成 でルートを解決"""
-        env_root = os.environ.get("YFC_ROOT")
-        if env_root:
-            p = Path(env_root).resolve()
-            if RootInitializer.is_initialized(p):
-                self._root_path = p
-                return
-
-        # ダイアログで既存選択を促す
-        reply = QMessageBox.question(
-            None,
-            "YoloForC ルート設定",
-            "YFC_ROOT が未設定です。\n"
-            "既存のルートを選択しますか？\n"
-            "（いいえ = 新規作成）",
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            path_str, _ = QFileDialog.getOpenFileName(
-                None,
-                "ルートマーカー (.yoloforc_root) を選択",
-                str(Path.home()),
-                "Marker (.yoloforc_root)",
-            )
-            # 実際にはファイル選択ではなくフォルダ選択の方が自然なので、
-            # ファイルダイアログで選択されたパスの親を採用
-            if path_str:
-                p = Path(path_str).parent
-                if RootInitializer.is_initialized(p):
-                    self._root_path = p
-                else:
-                    QMessageBox.warning(None, "未初期化", "選択されたフォルダは管理下ではありません。")
-        else:
-            path_str = QFileDialog.getExistingDirectory(
-                None, "新規ルートの作成先フォルダを選択"
-            )
-            if path_str:
-                p = Path(path_str).resolve()
-                YoloForC.init_root(p)
-                QMessageBox.information(
-                    None, "完了",
-                    f"以下にルートを初期化しました:\n{p}"
-                )
-                self._root_path = p
-
     def _call(self, func, *args, **kwargs) -> Any:
         """例外をキャッチして UI に表示。成功時は結果を返す。"""
+        if not self.ready or not self._yfc:
+            QMessageBox.warning(self.parent, "未接続", "ワークスペースが初期化されていません。")
+            return None
+            
         try:
             return func(*args, **kwargs)
         except YFCError as e:
@@ -107,12 +84,12 @@ class YFCBridge:
         return res is not None
 
     def list_datasets(self) -> List[str]:
-        if not self._yfc:
+        if not self.ready:
             return []
         return self._yfc.list_datasets()
 
     def get_dataset_meta(self, dataset_name: str) -> Optional[Dict[str, Any]]:
-        if not self._yfc:
+        if not self.ready:
             return None
         meta = self._call(self._yfc.get_dataset_meta, dataset_name)
         if meta is None:
@@ -131,12 +108,12 @@ class YFCBridge:
         return res is not None
 
     def list_uuids(self, dataset_name: str) -> List[Dict[str, Any]]:
-        if not self._yfc:
+        if not self.ready:
             return []
         return self._yfc.list_uuids(dataset_name)
 
     def get_uuid_detail(self, dataset_name: str, uuid: str) -> Optional[Dict[str, Any]]:
-        if not self._yfc:
+        if not self.ready:
             return None
         return self._call(self._yfc.get_uuid_detail, dataset_name, uuid)
 
@@ -174,7 +151,7 @@ class YFCBridge:
         )
 
     def analyze_source_structure(self, path: str) -> Optional[Dict[str, Any]]:
-        """インポート前の構造プレビュー"""
+        """インポート前の構造プレビュー（YoloForCのインスタンスに依存しない純粋関数として処理）"""
         try:
             struct = _analyze_folder(Path(path))
             return {
