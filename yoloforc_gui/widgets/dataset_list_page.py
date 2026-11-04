@@ -1,9 +1,12 @@
 """データセット一覧・新規登録画面"""
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QListWidget, QPushButton,
-    QHBoxLayout, QLabel, QInputDialog, QMessageBox,
+    QHBoxLayout, QLabel,QDialog, QInputDialog, QMessageBox,
 )
 
+from .new_dataset_dialog import NewDatasetDialog
+from .progress_dialog import ProgressDialog
+from ..core.workers import ImportWorker
 
 class DatasetListPage(QWidget):
     datasetSelected = str  # シグナル用（外部で connect）
@@ -52,13 +55,17 @@ class DatasetListPage(QWidget):
                 mw.open_dataset_detail(name)
 
     def _on_new(self):
-        name, ok = QInputDialog.getText(
-            self, "新規データセット", "データセット名（英数字）:"
-        )
-        if not ok or not name:
+        dlg = NewDatasetDialog(self.bridge, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
             return
 
-        # 英数字簡易チェック（ライブラリ側でもチェックされるが先に弾く）
+        vals = dlg.get_values()
+        name = vals["name"]
+        classes = vals["classes"]
+        notes = vals["notes"]
+        source_path = vals["source_path"]  # ← 追加
+
+        # バリデーション
         if not name.replace("_", "").replace("-", "").isalnum():
             QMessageBox.warning(self, "入力エラー", "英数字、アンダースコア、ハイフンのみ使用可能です。")
             return
@@ -67,29 +74,47 @@ class DatasetListPage(QWidget):
             QMessageBox.warning(self, "重複", f"'{name}' は既に存在します。")
             return
 
-        cls_text, ok2 = QInputDialog.getText(
-            self,
-            "クラス定義",
-            "クラス名をカンマ区切りで入力:",
-            text="class0, class1",
-        )
-        if not ok2:
-            return
-        classes = [c.strip() for c in cls_text.split(",") if c.strip()]
         if not classes:
             QMessageBox.warning(self, "入力エラー", "クラス名は1つ以上必要です。")
             return
 
-        notes, ok3 = QInputDialog.getText(
-            self, "メモ（任意）", "Notes:", text=""
-        )
-        notes = notes if ok3 else ""
-
+        # 1. データセットの初期化 (dataset.yaml の作成)
         success = self.bridge.init_dataset(
             name=name,
             classes=classes,
             notes=notes,
         )
+
         if success:
-            QMessageBox.information(self, "完了", f"データセット '{name}' を作成しました。")
+            if source_path:
+                # 同時インポートを非同期で実行
+                self.progress_dlg = ProgressDialog(self, title=f"初期インポート — {name}")
+                self.worker = ImportWorker(
+                    bridge=self.bridge, dataset_name=name, source=source_path,
+                    classes=classes, note="初回インポート (データセット作成時)",
+                    annotator="", tags=["initial_import"]
+                )
+                
+                self.worker.progressChanged.connect(self.progress_dlg.update_progress)
+                self.worker.formatDetected.connect(self.progress_dlg.set_format)
+                
+                def on_success(res):
+                    self.progress_dlg.accept()
+                    QMessageBox.information(self, "完了", f"データセットを作成し、インポートを完了しました。\nImages: {res.image_count}")
+                    self.refresh()
+                
+                def on_error(err):
+                    self.progress_dlg.reject()
+                    QMessageBox.warning(self, "警告", f"データセットは作成されましたが、インポートに失敗しました:\n{err}")
+                    self.refresh()
+                
+                self.worker.finishedSuccessfully.connect(on_success)
+                self.worker.errorOccurred.connect(on_error)
+                
+                self.worker.start()
+                self.progress_dlg.exec()
+            else:
+                QMessageBox.information(self, "完了", f"データセット '{name}' を手動で作成しました。")
+                self.refresh()
+            
             self.refresh()

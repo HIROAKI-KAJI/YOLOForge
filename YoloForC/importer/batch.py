@@ -13,6 +13,8 @@ from ..models import ImportResult, DatasetMeta
 from ..validator.structure import analyze_folder, SourceStructure
 from ..exceptions import YFCValidationError, YFCStorageError
 
+from .strategies.kyolo_text import KYoloStrategy
+from .strategies.labelme import LabelMeStrategy
 
 class BatchImporter:
     def __init__(self, dataset_dir: Path, dataset_meta: DatasetMeta):
@@ -27,6 +29,7 @@ class BatchImporter:
         note: Optional[str] = None,
         tags: Optional[List[str]] = None,
         annotator: Optional[str] = None,
+        progress_callback=None, # progress_callback: (current, total, message)
     ) -> ImportResult:
         """source ディレクトリ（YOLO 準拠）を1バッチとして UUID 下に保存する。
 
@@ -60,6 +63,16 @@ class BatchImporter:
 
         self._validate_classes(source_classes, struct)
 
+        # progress_callback ===============
+        # 形式の判定を先に行い、総ファイル数を把握
+        fmt = self._detect_format(struct)
+        total_files = len(struct.image_files)
+        
+        if progress_callback:
+            progress_callback(0, total_files, f"形式を検知しました: {fmt.upper()}。コピーを開始します...")
+        # /progress_callback ===============
+
+
         # UUID 発行。ここから例外が出ればロールバック
         uuid_dir = self.storage.generate_uuid_dir()
         uid = uuid_dir.name
@@ -73,48 +86,52 @@ class BatchImporter:
                 note=note,
                 tags=tags,
                 annotator=annotator,
+                progress_callback=progress_callback # ← Strategyに渡す
             )
         except Exception:
             self.storage.delete_uuid(uid)
             raise
 
+    def _detect_format(self, struct) -> str:
+        """画像と同じ階層のファイルを見て形式を判定する"""
+        if not struct.image_files:
+            return "unknown"
+        # 最初の数枚の画像に対してJSONが存在するかチェック
+        for img in struct.image_files[:5]:
+            if img.with_suffix(".json").exists():
+                return "labelme"
+        return "yolo"
+
     def _copy_transaction(
-        self,
-        uid: str,
-        struct: SourceStructure,
-        source: Path,
-        source_classes: List[str],
-        note: Optional[str],
-        tags: Optional[List[str]],
-        annotator: Optional[str],
-    ) -> ImportResult:
-        image_count = 0
-        label_count = 0
-        warnings: List[str] = []
+        self, uid, struct, source, source_classes, note, tags, annotator, progress_callback=None
+    )-> ImportResult:
+        # 1. 形式の判定
+        fmt = self._detect_format(struct)
+        
+        # 2. ルーティング
+        if fmt == "labelme":
+            strategy = LabelMeStrategy(self.storage, self.dataset_classes)
+        else:
+            strategy = KYoloStrategy(self.storage, self.dataset_classes)
 
-        # 画像・ラベルのコピー
-        for img_path in struct.image_files:
-            self.storage.safe_copy_image(img_path, uid)
-            image_count += 1
+        # 3. 実際のコピーと変換を委譲
+        image_count, label_count, warnings = strategy.process(
+            uid=uid, 
+            source=source, 
+            struct=struct, 
+            progress_callback=progress_callback
+        )
 
-            label_path = struct.label_map.get(img_path.stem)
-            if label_path and label_path.exists():
-                self.storage.safe_copy_label(label_path, uid)
-                label_count += 1
-            else:
-                warnings.append(f"no label file for image: {img_path.name}")
-
-        # 付属ファイル（data.yaml / classes.txt 等）があればコピーするが、
-        # これは呼び出し側が別途出力済みの場合があるため必須ではない
-        extra_candidates = ["classes.txt", "data.yaml", "data.yml"]
-        copied_extras: List[str] = []
+        # 4. 付属ファイルのコピー (既存処理)
+        extra_candidates = ["classes.txt", "data.yaml", "data.yml", "dataset_info.yaml"]
+        copied_extras = []
         for name in extra_candidates:
             src_file = source / name
             if src_file.is_file():
                 try:
                     self.storage.copy_to_uuid_root(src_file, uid)
                     copied_extras.append(name)
-                except YFCStorageError:
+                except Exception:
                     pass
 
         # メタ情報書き出し
@@ -138,7 +155,7 @@ class BatchImporter:
 
         return ImportResult(
             uuid=uid,
-            dataset_name=self.storage.dataset_dir.name,
+            dataset_name=self.dataset_name,
             image_count=image_count,
             label_count=label_count,
             warnings=warnings,

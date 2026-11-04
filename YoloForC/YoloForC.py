@@ -66,18 +66,14 @@ class YoloForC:
         note: Optional[str] = None,
         tags: Optional[List[str]] = None,
         annotator: Optional[str] = None,
+        progress_callback=None,  # ← 追加: 進行状況を報告するための任意の関数を受け取る
     ) -> ImportResult:
-        """外部フォルダ（YOLO形式）を UUID 管理下へインポートする。
-        完了後、自動で index.yaml と dataset.yaml total_images を同期する。
-        """
+        """外部フォルダ（YOLO形式）を UUID 管理下へインポートする。"""
         dset_dir = self.config.dataset_dir(dataset_name)
 
         meta_mgr = DatasetMetaManager(dset_dir)
         if not meta_mgr.exists():
-            raise YFCValidationError(
-                f"dataset.yaml が見つかりません。 "
-                f"init_dataset('{dataset_name}', classes=[...]) でデータセットを初期化してください。"
-            )
+            raise YFCValidationError("dataset.yaml が見つかりません。")
         dataset_meta = meta_mgr.read()
 
         importer = BatchImporter(dset_dir, dataset_meta)
@@ -87,6 +83,7 @@ class YoloForC:
             note=note,
             tags=tags,
             annotator=annotator,
+            progress_callback=progress_callback,  # ← 追加: インポーターにそのまま渡す
         )
 
         # 自動同期: index.yaml + total_images

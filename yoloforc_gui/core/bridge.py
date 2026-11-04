@@ -12,6 +12,7 @@ from YoloForC.storage.initializer import RootInitializer
 from YoloForC.validator.structure import analyze_folder as _analyze_folder
 from YoloForC.models import ImportResult
 
+from .dataset_parsers import parse_dataset_info
 
 class YFCBridge:
     def __init__(self, parent_widget=None):
@@ -131,7 +132,15 @@ class YFCBridge:
 
     # --- インポート ---
 
-    def import_folder(
+    def extract_metadata_from_source(self, path: str) -> Optional[Dict[str, Any]]:
+        """インポート元のディレクトリからメタデータ（クラスやメモ）を自動抽出する"""
+        try:
+            return parse_dataset_info(Path(path))
+        except Exception as e:
+            print(f"Failed to parse metadata: {e}")
+            return None
+
+    def import_folder_async(
         self,
         dataset_name: str,
         source: str,
@@ -139,15 +148,21 @@ class YFCBridge:
         note: str,
         annotator: str,
         tags: Optional[List[str]],
+        progress_callback=None
     ) -> Optional[ImportResult]:
-        return self._call(
-            self._yfc.import_folder,
+        """バックグラウンドワーカーから呼ばれるコールバック付きインポート"""
+        if not self.ready or not self._yfc:
+            raise Exception("ワークスペースが初期化されていません。")
+        
+        # YoloForC (バックエンド) の import_folder に progress_callback を渡す
+        return self._yfc.import_folder(
             source=source,
             dataset_name=dataset_name,
             classes=classes,
             note=note,
             annotator=annotator,
             tags=tags,
+            progress_callback=progress_callback
         )
 
     def analyze_source_structure(self, path: str) -> Optional[Dict[str, Any]]:
