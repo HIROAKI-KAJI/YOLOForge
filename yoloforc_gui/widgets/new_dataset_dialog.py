@@ -61,12 +61,14 @@ class NewDatasetDialog(QDialog):
             self.edit_classes.setText(", ".join(meta["classes"]))
         if meta.get("notes"):
             self.edit_notes.setPlainText(meta["notes"])
-            
+        
         QMessageBox.information(
             self, 
             "自動入力", 
             f"【{fmt}】形式のデータセットを検出し、タグ情報を自動入力しました。"
         )
+
+
 
     def get_values(self):
         return {
@@ -75,3 +77,5 @@ class NewDatasetDialog(QDialog):
             "notes": self.edit_notes.toPlainText().strip(),
             "source_path": self.source_path  # データセット本体のコピーのため、パスも一緒に親へ返す
         }
+
+    

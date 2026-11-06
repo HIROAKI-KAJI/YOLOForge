@@ -1,0 +1,37 @@
+{
+    "taskTypes": [
+        {
+            "label": "TODO",
+            "color": "#3fb950",
+            "icon": "todo"
+        },
+        {
+            "label": "WARN",
+            "color": "#d29922",
+            "icon": "warn"
+        },
+        {
+            "label": "ERROR",
+            "color": "#f85149",
+            "icon": "error"
+        },
+        {
+            "label": "NOTE",
+            "color": "#1f6feb",
+            "icon": "note"
+        }
+    ],
+    "assignees": [
+        "LumenHero",
+        "Guest"
+    ],
+    "tags": [
+        "UI",
+        "Bug",
+        "Refactor"
+    ],
+    "insertion": {
+        "includeTime": true,
+        "timeRounding": 15
+    }
+}

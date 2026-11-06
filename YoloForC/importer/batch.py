@@ -15,6 +15,8 @@ from ..exceptions import YFCValidationError, YFCStorageError
 
 from .strategies.kyolo_text import KYoloStrategy
 from .strategies.labelme import LabelMeStrategy
+from .strategies.coco import CocoStrategy
+from .strategies.voc import VocStrategy
 
 class BatchImporter:
     def __init__(self, dataset_dir: Path, dataset_meta: DatasetMeta):
@@ -65,7 +67,7 @@ class BatchImporter:
 
         # progress_callback ===============
         # 形式の判定を先に行い、総ファイル数を把握
-        fmt = self._detect_format(struct)
+        fmt = self._detect_format(struct, source)
         total_files = len(struct.image_files)
         
         if progress_callback:
@@ -92,25 +94,56 @@ class BatchImporter:
             self.storage.delete_uuid(uid)
             raise
 
-    def _detect_format(self, struct) -> str:
-        """画像と同じ階層のファイルを見て形式を判定する"""
+    def _detect_format(self, struct, source: Path) -> str:
+        """フォルダ構造とファイルを見てフォーマットを判定する"""
         if not struct.image_files:
             return "unknown"
-        # 最初の数枚の画像に対してJSONが存在するかチェック
-        for img in struct.image_files[:5]:
+            
+        # 1. COCO判定: images, categories, annotations キーを持つJSONを探す
+        json_files = list(source.glob("*.json")) + list(source.glob("annotations/*.json"))
+        for jpath in json_files:
+            try:
+                # 最初の数百バイトだけ読んで軽量に推測するか、パースする
+                with open(jpath, 'r', encoding='utf-8') as f:
+                    import json
+                    data = json.load(f)
+                    if "images" in data and "categories" in data and "annotations" in data:
+                        return "coco"
+            except Exception:
+                continue
+
+        # 2. LabelMe判定: 画像と同名のJSONが複数存在するか
+        labelme_jsons = 0
+        for img in struct.image_files[:10]:
             if img.with_suffix(".json").exists():
-                return "labelme"
+                labelme_jsons += 1
+        if labelme_jsons > 0:
+            return "labelme"
+            
+        # 3. Pascal VOC判定: 画像と同名、または Annotations/ 配下に XML が存在するか
+        voc_xmls = 0
+        for img in struct.image_files[:10]:
+            if img.with_suffix(".xml").exists() or (source / "Annotations" / f"{img.stem}.xml").exists():
+                voc_xmls += 1
+        if voc_xmls > 0:
+            return "voc"
+            
+        # 4. デフォルトはYOLO
         return "yolo"
 
     def _copy_transaction(
         self, uid, struct, source, source_classes, note, tags, annotator, progress_callback=None
     )-> ImportResult:
         # 1. 形式の判定
-        fmt = self._detect_format(struct)
+        fmt = self._detect_format(struct, source)
         
         # 2. ルーティング
         if fmt == "labelme":
             strategy = LabelMeStrategy(self.storage, self.dataset_classes)
+        elif fmt == "coco":
+            strategy = CocoStrategy(self.storage, self.dataset_classes)
+        elif fmt == "voc":
+            strategy = VocStrategy(self.storage, self.dataset_classes)
         else:
             strategy = KYoloStrategy(self.storage, self.dataset_classes)
 
