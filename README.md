@@ -58,7 +58,7 @@ YoloForC/
 └── validator/
     ├── __init__.py
     ├── structure.py         # フォルダ・ファイル構造チェック
-    └── integrity.py         # image/labels 対応関係・meta.yaml 整合性
+    └── integrity.py         # image/labels 対応関係・dataset_info.yaml 整合性
 ```
 
 

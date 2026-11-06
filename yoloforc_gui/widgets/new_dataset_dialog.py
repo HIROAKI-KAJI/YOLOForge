@@ -40,12 +40,19 @@ class NewDatasetDialog(QDialog):
         layout.addWidget(self.btns)
 
     def _on_folder_dropped(self, path: str):
-        self.source_path = path  # ← ドロップされたパスを記録
+        self.source_path = path
         
         meta = self.bridge.extract_metadata_from_source(path)
         if not meta:
-            QMessageBox.warning(self, "パース失敗", "dataset_info.yaml が見つからないか、読み込めません。")
+            QMessageBox.warning(
+                self, 
+                "パース失敗", 
+                "対応しているデータセット形式（KYOLO / LabelMe等）が見つからないか、クラス情報を読み込めません。"
+            )
             return
+            
+        # 検知したフォーマットを取得
+        fmt = meta.get("format", "Unknown")
             
         if meta.get("dataset_name"):
             safe_name = "".join(c for c in meta["dataset_name"] if c.isalnum() or c in "_-")
@@ -55,7 +62,11 @@ class NewDatasetDialog(QDialog):
         if meta.get("notes"):
             self.edit_notes.setPlainText(meta["notes"])
             
-        QMessageBox.information(self, "自動入力", "データセット情報を自動入力しました。内容を確認してください。")
+        QMessageBox.information(
+            self, 
+            "自動入力", 
+            f"【{fmt}】形式のデータセットを検出し、タグ情報を自動入力しました。"
+        )
 
     def get_values(self):
         return {

@@ -12,7 +12,7 @@ from YoloForC.storage.initializer import RootInitializer
 from YoloForC.validator.structure import analyze_folder as _analyze_folder
 from YoloForC.models import ImportResult
 
-from .dataset_parsers import parse_dataset_info
+from .dataset_parsers import detect_and_extract_metadata
 
 class YFCBridge:
     def __init__(self, parent_widget=None):
@@ -135,7 +135,7 @@ class YFCBridge:
     def extract_metadata_from_source(self, path: str) -> Optional[Dict[str, Any]]:
         """インポート元のディレクトリからメタデータ（クラスやメモ）を自動抽出する"""
         try:
-            return parse_dataset_info(Path(path))
+            return detect_and_extract_metadata(Path(path))
         except Exception as e:
             print(f"Failed to parse metadata: {e}")
             return None

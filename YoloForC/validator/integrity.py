@@ -30,7 +30,7 @@ class IntegrityValidator:
         if no_image:
             issues.append(ValidationIssue("error", uid, f"画像なしラベル: {no_image}"))
         
-        # 3. meta.yaml と実ファイル数の一致
+        # 3. dataset_info.yaml と実ファイル数の一致
         meta_img = meta.get("image_count")
         if meta_img is not None and meta_img != len(imgs):
             issues.append(ValidationIssue("warning", uid, 

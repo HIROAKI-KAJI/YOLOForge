@@ -46,24 +46,24 @@ class StorageProxy:
 
     def read_meta_yaml(self, uuid: str) -> Dict:
         import yaml
-        p = self.uuid_dir(uuid) / "meta.yaml"
+        p = self.uuid_dir(uuid) / "dataset_info.yaml"
         if not p.exists():
             return {}
         try:
             return yaml.safe_load(p.read_text(encoding="utf-8")) or {}
         except Exception as e:
-            raise YFCStorageError(f"meta.yaml read failed: {p}\n-> {e}")
+            raise YFCStorageError(f"dataset_info.yaml read failed: {p}\n-> {e}")
 
     def write_meta_yaml(self, uuid: str, data: Dict):
         import yaml
-        p = self.uuid_dir(uuid) / "meta.yaml"
+        p = self.uuid_dir(uuid) / "dataset_info.yaml"
         try:
             p.write_text(
                 yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
                 encoding="utf-8"
             )
         except Exception as e:
-            raise YFCStorageError(f"meta.yaml write failed: {p}\n-> {e}")
+            raise YFCStorageError(f"dataset_info.yaml write failed: {p}\n-> {e}")
 
     # --- image / labels / root file コピー ---
 
