@@ -6,9 +6,9 @@ from PySide6.QtGui import QStandardItemModel, QStandardItem
 class UUIDTableModel(QStandardItemModel):
     def __init__(self, parent=None):
         super().__init__(parent)
-        # TAGS の次に Action 列を追加
+        # Actionの横に Report を追加
         self.setHorizontalHeaderLabels([
-            "UUID", "Images", "Labels", "Status", "Annotator", "Tags", "Action"
+            "UUID", "Images", "Labels", "Status", "Annotator", "Tags", "Action", "Report"
         ])
 
     def refresh(self, records: List[Dict[str, Any]]):
@@ -24,6 +24,7 @@ class UUIDTableModel(QStandardItemModel):
                     ", ".join(rec.get("batch_tags") or rec.get("tags") or [])
                 ),
                 QStandardItem(""),   # Action 列は空（Delegate でボタン描画）
+                QStandardItem(""),   # Report 列 (詳細確認ボタンで描画)
             ]
             for it in row:
                 it.setEditable(False)

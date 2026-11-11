@@ -177,6 +177,8 @@ class YFCBridge:
         except Exception as e:
             QMessageBox.warning(None, "構造解析エラー", str(e))
             return None
+    
+    
 
     # --- エクスポート（将来的に利用可能） ---
     def export_yolo_ready(

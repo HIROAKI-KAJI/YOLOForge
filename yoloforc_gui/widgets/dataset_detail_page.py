@@ -1,17 +1,21 @@
 """データセット詳細画面：閲覧、インポート、Rebuild、設定編集、VIEWボタン。"""
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLabel, QPushButton, QTableView, QMessageBox, QGroupBox, QDialog,
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
+    QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QFileDialog,
+    QProgressBar, QStackedWidget, QWidget, QGroupBox, QFormLayout, QTableView
 )
 
 from ..core.bridge import YFCBridge
+from ..core.reporter import DatasetReporter
 from ..models.view_models import UUIDTableModel
 from .import_wizard import ImportWizard
 from .dataset_meta_dialog import DatasetMetaEditDialog
+from .dataset_report_dialog import DatasetReportDialog
 from .button_delegate import ButtonDelegate
 from .uuid_viewer_dialog import UUIDViewerDialog
 
+from pathlib import Path
 
 class DatasetDetailPage(QWidget):
     def __init__(self, bridge: YFCBridge, parent=None):
@@ -43,6 +47,7 @@ class DatasetDetailPage(QWidget):
         tbar = QHBoxLayout()
         self.btn_back = QPushButton("← 一覧へ戻る")
         self.btn_edit_meta = QPushButton("✏ 設定編集")
+        self.btn_report_all = QPushButton("詳細レポート")
         self.btn_rebuild = QPushButton("Rebuild Index")
         self.btn_import = QPushButton("+ インポート")
 
@@ -51,6 +56,7 @@ class DatasetDetailPage(QWidget):
         tbar.addStretch()
         tbar.addWidget(self.btn_rebuild)
         tbar.addWidget(self.btn_import)
+        tbar.addWidget(self.btn_report_all)
         layout.addLayout(tbar)
 
         # === UUID 一覧 ===
@@ -66,6 +72,15 @@ class DatasetDetailPage(QWidget):
         # Action 列 = インデックス 6
         self.table.setItemDelegateForColumn(6, self._btn_delegate)
         self._btn_delegate.buttonClicked.connect(self._open_uuid_viewer)
+
+
+        # Report 列 (7) に REPORT ボタンを追加
+        self._btn_delegate_report = ButtonDelegate(label="REPORT", parent=self)
+        self.table.setItemDelegateForColumn(7, self._btn_delegate_report)
+        self._btn_delegate_report.buttonClicked.connect(self._open_uuid_report)
+
+
+        self.btn_report_all.clicked.connect(self._open_dataset_report)
 
         layout.addWidget(self.table)
 
@@ -177,3 +192,55 @@ class DatasetDetailPage(QWidget):
         )
         dlg.exec()
         self.refresh()
+
+    
+    def _open_dataset_report(self):
+        """データセット全体に対するレポート"""
+        # 1. データセット内の全バッチ(UUID)のリストを取得
+        records = self.bridge.list_uuids(self.dataset_name)
+        
+        all_images = []
+        all_labels = []
+        
+        # 2. 各UUIDの詳細情報からファイルパスをかき集める
+        for rec in records:
+            uuid = rec.get("uuid")
+            if not uuid:
+                continue
+                
+            detail = self.bridge.get_uuid_detail(self.dataset_name, uuid)
+            if detail and "files" in detail:
+                all_images.extend([Path(p) for p in detail["files"].get("images", [])])
+                all_labels.extend([Path(p) for p in detail["files"].get("labels", [])])
+        
+        # 3. 万が一データが空の場合はメッセージを出して終了
+        if not all_images:
+            QMessageBox.information(self, "情報", "データセット内に画像が存在しません。")
+            return
+            
+        # 4. メタデータからクラスを取得
+        meta = self.bridge.get_dataset_meta(self.dataset_name)
+        classes = meta.get("classes", []) if meta else []
+        
+        # 5. かき集めた全ファイルをレポーターに渡してダイアログを起動
+        reporter = DatasetReporter(self.dataset_name, all_images, all_labels, classes)
+        dlg = DatasetReportDialog(reporter, self)
+        dlg.exec()
+
+    def _open_uuid_report(self, row: int):
+        """特定のバッチ(UUID)のみに対するレポート"""
+        idx = self._model.index(row, 0)
+        uuid = idx.data()
+        detail = self.bridge.get_uuid_detail(self.dataset_name, uuid)
+        if not detail or "files" not in detail: return
+
+        # UUIDに紐づくファイルだけを抽出
+        images = [Path(p) for p in detail["files"].get("images", [])]
+        labels = [Path(p) for p in detail["files"].get("labels", [])]
+        
+        meta = self.bridge.get_dataset_meta(self.dataset_name)
+        classes = meta.get("classes", []) if meta else []
+        
+        reporter = DatasetReporter(uuid, images, labels, classes)
+        dlg = DatasetReportDialog(reporter, self)
+        dlg.exec()

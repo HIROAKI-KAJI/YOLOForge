@@ -1,22 +1,26 @@
 """UUID 単位の画像・ラベル確認・簡易編集ダイアログ。
 Blender 風レイアウト（左:ビューア+リスト / 右:サイドバー編集）。
-viewer-confirm-exporter.py [1] のテキスト編集機能を踏襲。
+viewer-confirm-reporter.py [1] のテキスト編集機能を踏襲。
+プラグインAPI（ViewerAPI）をサポート。
 """
 import random
+import importlib
+import pkgutil
+import sys
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QSplitter,
     QListWidget, QListWidgetItem, QLabel, QTextEdit,
     QPushButton, QMessageBox, QWidget, QFormLayout,
-    QGroupBox, QSizePolicy,
+    QGroupBox, QSizePolicy, QMenuBar, QMenu
 )
 from PySide6.QtGui import (
     QPixmap, QPainter, QPen, QColor, QBrush, QFont,
-    QKeyEvent,
+    QKeyEvent, QAction
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 
 
 # --- クラス色は従来通り ---
@@ -41,6 +45,7 @@ class ImageCanvas(QWidget):
         self._pixmap: QPixmap = QPixmap()
         self._bboxes: List[Tuple[int, float, float, float, float]] = []
         self._class_names: List[str] = []
+        self._visible_classes: Optional[List[int]] = None  # プラグイン用フィルタ
 
     def set_data(self, pixmap: QPixmap, bboxes: List[Tuple[int, float, float, float, float]], class_names: List[str]):
         self._pixmap = pixmap
@@ -51,6 +56,11 @@ class ImageCanvas(QWidget):
     def clear(self):
         self._pixmap = QPixmap()
         self._bboxes = []
+        self.update()
+
+    def set_visible_classes(self, class_ids: Optional[List[int]]):
+        """特定のクラスのみを描画するフィルタを設定する（Noneで全表示）"""
+        self._visible_classes = class_ids
         self.update()
 
     def paintEvent(self, event):
@@ -82,6 +92,10 @@ class ImageCanvas(QWidget):
         painter.setFont(font)
 
         for cid, bx, by, bw, bh in self._bboxes:
+            # フィルタリング適用
+            if self._visible_classes is not None and cid not in self._visible_classes:
+                continue
+
             rx = x_off + bx * sx
             ry = y_off + by * sy
             rw = bw * sx
@@ -104,13 +118,108 @@ class ImageCanvas(QWidget):
         painter.end()
 
 
+class ViewerAPI:
+    """プラグインに渡される、本体操作用のインターフェース"""
+    def __init__(self, dialog: 'UUIDViewerDialog'):
+        self._dialog = dialog
+        
+        # シグナルの公開
+        self.index_changed = dialog.index_changed
+        self.labels_modified = dialog.labels_modified
+        self.labels_saved = dialog.labels_saved
+
+    # --- 1. 状態取得 API ---
+    def get_current_index(self) -> int:
+        return self._dialog.current_idx
+
+    def get_total_count(self) -> int:
+        return len(self._dialog.pairs)
+
+    def get_class_names(self) -> List[str]:
+        return self._dialog._class_names.copy()
+
+    def get_current_image_path(self) -> Optional[Path]:
+        if not self._dialog.pairs: return None
+        return self._dialog.pairs[self._dialog.current_idx][0]
+
+    def get_current_label_path(self) -> Optional[Path]:
+        if not self._dialog.pairs: return None
+        return self._dialog.pairs[self._dialog.current_idx][1]
+
+    def get_current_labels(self) -> List[Tuple[int, float, float, float, float]]:
+        return self._dialog.canvas._bboxes.copy()
+
+    def get_data_at(self, index: int) -> Tuple[Optional[Path], Optional[Path]]:
+        if 0 <= index < len(self._dialog.pairs):
+            return self._dialog.pairs[index]
+        return (None, None)
+
+    def get_uuid(self) -> str:
+        return self._dialog.uuid
+
+    # --- 2. 操作・更新 API ---
+    def navigate_to(self, index: int):
+        if 0 <= index < len(self._dialog.pairs):
+            self._dialog.list_widget.setCurrentRow(index)
+
+    def navigate_next(self):
+        self._dialog._next()
+
+    def navigate_prev(self):
+        self._dialog._prev()
+
+    def update_current_labels(self, new_labels: List[Tuple[int, float, float, float, float]]):
+        # Yoloフォーマット文字列に変換してテキストエディタにセット
+        lines = []
+        for cid, xc, yc, w, h in new_labels:
+            lines.append(f"{cid} {xc:.6f} {yc:.6f} {w:.6f} {h:.6f}")
+        text = "\n".join(lines)
+        self._dialog.txt_edit.setPlainText(text)
+        # キャンバスも更新
+        self._dialog.canvas._bboxes = new_labels
+        self._dialog.canvas.update()
+
+    def save_current_labels(self):
+        self._dialog._save_current_label()
+
+    # --- 4. 描画・UI介入 API ---
+    def set_canvas_filter(self, class_ids: Optional[List[int]]):
+        self._dialog.canvas.set_visible_classes(class_ids)
+
+    def add_sidebar_widget(self, widget: QWidget, title: str = ""):
+        # グループボックスで包んで追加
+        group_box = QGroupBox(title)
+        layout = QVBoxLayout(group_box)
+        layout.addWidget(widget)
+        self._dialog.plugin_layout.addWidget(group_box)
+
+    def add_menu_action(self, menu_name: str, action: QAction):
+        # 既存のメニューを探すか新規作成
+        target_menu = None
+        for action_obj in self._dialog.menu_bar.actions():
+            if action_obj.menu() and action_obj.menu().title() == menu_name:
+                target_menu = action_obj.menu()
+                break
+        
+        if not target_menu:
+            target_menu = self._dialog.menu_bar.addMenu(menu_name)
+        
+        target_menu.addAction(action)
+
+
 class UUIDViewerDialog(QDialog):
+    # プラグイン向けシグナル
+    index_changed = Signal(int, Path, Path)
+    labels_modified = Signal(str)
+    labels_saved = Signal(Path)
+
     def __init__(
         self,
         uuid: str,
         image_dir: str,
         labels_dir: str,
         class_names: List[str] = None,
+        enabled_plugins: List[str] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -118,25 +227,31 @@ class UUIDViewerDialog(QDialog):
         self.image_dir = Path(image_dir)
         self.labels_dir = Path(labels_dir)
         self._class_names = list(class_names) if class_names else []
+        self._enabled_plugins = enabled_plugins or []
 
         self.setWindowTitle(f"Viewer — {uuid}")
         self.resize(1600, 950)
 
         self.pairs: List[Tuple[Path, Path]] = []
         self.current_idx: int = 0
+        self.loaded_plugins = []
 
         self._build_ui()
         self._load_pairs()
 
-    # ------------------------------------------------------------------
-    # UI 構築 : メイン水平スプリッター
-    #  Left  : 垂直スプリッター [上:ImageCanvas(大)] [下:FileList(小)]
-    #  Right : サイドバー [Info] [TextEdit] [Nav/Save]
-    # ------------------------------------------------------------------
+        # プラグインAPIの初期化と読み込み
+        self.api = ViewerAPI(self)
+        self._load_plugins()
+
     def _build_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
+        # メインレイアウト
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(4, 4, 4, 4)
+        main_layout.setSpacing(4)
+
+        # 拡張ポイント1: メニューバー
+        self.menu_bar = QMenuBar(self)
+        main_layout.setMenuBar(self.menu_bar)
 
         # === Root : 水平スプリッター ===
         root_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -144,7 +259,7 @@ class UUIDViewerDialog(QDialog):
         # --- Left Pane : 垂直スプリッター ---
         left_splitter = QSplitter(Qt.Orientation.Vertical)
 
-        # Canvas（大きく）
+        # Canvas
         self.canvas = ImageCanvas(self)
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.canvas.setMinimumHeight(400)
@@ -162,7 +277,6 @@ class UUIDViewerDialog(QDialog):
         list_layout.addWidget(self.list_widget)
         left_splitter.addWidget(list_container)
 
-        # Stretch factor : Canvas を優先
         left_splitter.setStretchFactor(0, 5)
         left_splitter.setStretchFactor(1, 1)
         left_splitter.setSizes([700, 200])
@@ -189,11 +303,12 @@ class UUIDViewerDialog(QDialog):
         info_form.addRow("Size:", self.lbl_img_size)
         sb_layout.addWidget(info_box)
 
-        # Text Editor [1]
+        # Text Editor
         edit_box = QGroupBox("Label Text (YOLO)")
         edit_layout = QVBoxLayout(edit_box)
         self.txt_edit = QTextEdit()
         self.txt_edit.setMinimumHeight(200)
+        self.txt_edit.textChanged.connect(self._on_text_modified) # シグナル発火用
         edit_layout.addWidget(self.txt_edit)
 
         btn_bar = QHBoxLayout()
@@ -204,7 +319,7 @@ class UUIDViewerDialog(QDialog):
         edit_layout.addLayout(btn_bar)
         sb_layout.addWidget(edit_box)
 
-        # Nav + Close
+        # Nav
         nav_box = QWidget()
         nav_layout = QHBoxLayout(nav_box)
         self.btn_prev = QPushButton("◀ Prev")
@@ -216,16 +331,18 @@ class UUIDViewerDialog(QDialog):
         nav_layout.addWidget(self.btn_next)
         sb_layout.addWidget(nav_box)
 
+        # 拡張ポイント2: プラグイン専用レイアウト
+        self.plugin_layout = QVBoxLayout()
+        sb_layout.addLayout(self.plugin_layout)
+
         sb_layout.addStretch()
         root_splitter.addWidget(sidebar)
 
-        # Root stretch factor
         root_splitter.setStretchFactor(0, 4)
         root_splitter.setStretchFactor(1, 1)
 
-        layout.addWidget(root_splitter)
+        main_layout.addWidget(root_splitter)
 
-    # ------------------------------------------------------------------
     def _load_pairs(self):
         if not self.image_dir.exists():
             QMessageBox.critical(self, "Error", f"image dir not found:\n{self.image_dir}")
@@ -250,6 +367,35 @@ class UUIDViewerDialog(QDialog):
             self._show_pair(0)
         else:
             self.lbl_counter.setText("0 / 0")
+
+    def _load_plugins(self):
+        # config.py からグローバルインスタンスをインポート
+        from ..core.config import plugin_manager
+        import importlib
+        import pkgutil
+        
+        # マネージャーに有効なプラグインを聞く
+        enabled_plugins = plugin_manager.get_enabled_plugins()
+        
+        # plugins.__path__ ではなく、plugin_manager が解決したディレクトリパスを使う
+        for _, module_name, _ in pkgutil.iter_modules([str(plugin_manager.plugins_dir)]):
+            if module_name in enabled_plugins:
+                module = importlib.import_module(f"plugins.{module_name}")
+                if hasattr(module, "register_plugin"):
+                    plugin_instance = module.register_plugin(self.api)
+                    self.loaded_plugins.append(plugin_instance)
+                    
+                    if hasattr(plugin_instance, "on_image_changed"):
+                        self.index_changed.connect(plugin_instance.on_image_changed)
+                        
+                    if hasattr(plugin_instance, "on_labels_modified"):
+                        self.labels_modified.connect(plugin_instance.on_labels_modified)
+                        
+                    if hasattr(plugin_instance, "on_labels_saved"):
+                        self.labels_saved.connect(plugin_instance.on_labels_saved)
+                    
+                    if hasattr(plugin_instance, "setup_ui"):
+                        plugin_instance.setup_ui()
 
     def _on_row_changed(self, row: int):
         if 0 <= row < len(self.pairs):
@@ -295,7 +441,9 @@ class UUIDViewerDialog(QDialog):
         if pix.isNull():
             self.canvas.clear()
             self.lbl_img_size.setText("? x ?")
+            self.txt_edit.blockSignals(True)
             self.txt_edit.setPlainText("")
+            self.txt_edit.blockSignals(False)
             return
 
         iw, ih = pix.width(), pix.height()
@@ -304,6 +452,7 @@ class UUIDViewerDialog(QDialog):
         bboxes = self._parse_yolo_label(txt, iw, ih)
         self.canvas.set_data(pix, bboxes, self._class_names)
 
+        self.txt_edit.blockSignals(True) # 無駄なシグナル発火を防ぐ
         if txt.exists():
             self.txt_edit.setPlainText(txt.read_text(encoding="utf-8"))
             self.txt_edit.setEnabled(True)
@@ -313,6 +462,13 @@ class UUIDViewerDialog(QDialog):
             self.txt_edit.setPlaceholderText("No label file")
             self.txt_edit.setEnabled(False)
             self.btn_save.setEnabled(False)
+        self.txt_edit.blockSignals(False)
+
+        # イベント通知
+        self.index_changed.emit(idx, img, txt)
+
+    def _on_text_modified(self):
+        self.labels_modified.emit(self.txt_edit.toPlainText())
 
     def _save_current_label(self):
         if not self.pairs:
@@ -325,6 +481,9 @@ class UUIDViewerDialog(QDialog):
             if item:
                 item.setForeground(Qt.GlobalColor.black)
             self._show_pair(self.current_idx)
+            
+            # イベント通知
+            self.labels_saved.emit(txt)
         except Exception as e:
             QMessageBox.critical(self, "Save Error", str(e))
 
@@ -336,9 +495,6 @@ class UUIDViewerDialog(QDialog):
         if self.current_idx < len(self.pairs) - 1:
             self.list_widget.setCurrentRow(self.current_idx + 1)
 
-    # ------------------------------------------------------------------
-    # キーボード: テキストエディタにフォーカスがある時はページめくりを無視 [1]
-    # ------------------------------------------------------------------
     def keyPressEvent(self, event: QKeyEvent):
         if self.txt_edit.hasFocus():
             super().keyPressEvent(event)

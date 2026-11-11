@@ -3,11 +3,23 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QStackedWidget,
     QListWidget, QLabel, QSplitter, QMessageBox, QPushButton
 )
+from PySide6.QtGui import (
+    QAction
+)
 
 from ..core.bridge import YFCBridge
+
+from .plugin_settings_dialog import PluginSettingsDialog
+
 from .dataset_list_page import DatasetListPage
 from .dataset_detail_page import DatasetDetailPage
 from .welcome_dashboard import WelcomeDashboard
+
+# ワークスペース全体レポート用
+from pathlib import Path
+from PySide6.QtWidgets import QPushButton, QMessageBox
+from .dataset_report_dialog import DatasetReportDialog
+from ..core.reporter import DatasetReporter
 
 class MainWindow(QMainWindow):
     def __init__(self, bridge: YFCBridge, parent=None):
@@ -15,6 +27,14 @@ class MainWindow(QMainWindow):
         self.bridge = bridge
         self.setWindowTitle("YOLO FORGE")
         self.resize(1200, 800)
+
+        # MENU
+        menubar = self.menuBar()
+        settings_menu = menubar.addMenu("設定(&S)")
+        
+        plugin_action = QAction("プラグイン管理(&P)", self)
+        plugin_action.triggered.connect(self._open_plugin_settings)
+        settings_menu.addAction(plugin_action)
 
         # 中央ウィジェットと全体レイアウト
         central = QWidget()
@@ -44,13 +64,20 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left)
         
         # ワークスペース切り替えボタンを追加
-        self.btn_switch_workspace = QPushButton("🏠 ワークスペース切替")
+        self.btn_switch_workspace = QPushButton("ワークスペース切替")
         self.btn_switch_workspace.clicked.connect(self._show_welcome)
         left_layout.addWidget(self.btn_switch_workspace)
+
+        # ワークスペース単位の操作用ボタングループ
+        self.btn_workspace_report = QPushButton("ワークスペース全体レポート")
+        self.btn_workspace_report.setStyleSheet("font-weight: bold; background-color: #2d5a2d; padding: 5px; margin-top: 6px;")
+        self.btn_workspace_report.clicked.connect(self._open_workspace_report)
+        left_layout.addWidget(self.btn_workspace_report)
 
         self.nav_list = QListWidget()
         self.nav_list.itemClicked.connect(self._on_nav_clicked)
         left_layout.addWidget(self.nav_list)
+
         splitter.addWidget(left)
 
         # 右ペイン：コンテンツ (既存の Dataset リスト/詳細)
@@ -89,6 +116,11 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "初期化エラー", f"ワークスペースの初期化に失敗しました:\n{e}")
 
+
+    def _open_plugin_settings(self):
+        dlg = PluginSettingsDialog(self)
+        dlg.exec()
+
     def _show_welcome(self):
         """ダッシュボードへ戻る"""
         self.setWindowTitle("YOLO FORGE")
@@ -112,3 +144,47 @@ class MainWindow(QMainWindow):
         self.refresh_nav()
         self.page_list.refresh()
         self.content_stack.setCurrentWidget(self.page_list)
+
+
+    def _open_workspace_report(self):
+        """ワークスペース全体の全バッチを横断した品質レポートを表示する"""
+        if not self.bridge.ready or not self.bridge._root_path:
+            QMessageBox.warning(self, "エラー", "ワークスペースが読み込まれていません。")
+            return
+
+        dataset_names = self.bridge.list_datasets()
+        if not dataset_names:
+            QMessageBox.information(self, "情報", "ワークスペースにデータセットが存在しません。")
+            return
+            
+        all_images = []
+        all_labels = []
+        workspace_classes = []
+        
+        for dname in dataset_names:
+            # ワークスペース内でタグが統一されている前提なので、最初のクラス定義を流用
+            if not workspace_classes:
+                meta = self.bridge.get_dataset_meta(dname)
+                if meta and "classes" in meta:
+                    workspace_classes = meta["classes"]
+            
+            # 各データセット内の全UUIDファイルを集約
+            records = self.bridge.list_uuids(dname)
+            for rec in records:
+                uuid = rec.get("uuid")
+                if not uuid:
+                    continue
+                
+                detail = self.bridge.get_uuid_detail(dname, uuid)
+                if detail and "files" in detail:
+                    all_images.extend([Path(p) for p in detail["files"].get("images", [])])
+                    all_labels.extend([Path(p) for p in detail["files"].get("labels", [])])
+                    
+        if not all_images:
+            QMessageBox.information(self, "情報", "ワークスペース内に画像が存在しません。")
+            return
+            
+        # 汎用レポーターに全パスを渡してダイアログを起動
+        reporter = DatasetReporter("Workspace All Datasets", all_images, all_labels, workspace_classes)
+        dlg = DatasetReportDialog(reporter, self)
+        dlg.exec()
