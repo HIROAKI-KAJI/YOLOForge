@@ -76,7 +76,7 @@ class MainWindow(QMainWindow):
         """ワークスペースパスを受け取り、バックエンドを初期化してメイン画面へ遷移"""
         try:
             # bridge 経由で YoloForC を初期化する処理
-            # （bridge.py に initialize_root(path) のようなメソッドを追加しておく想定）
+            # （bridge.py に initialize_root(path) メソッドを追加した）
             self.bridge.initialize_root(root_path) 
             self.setWindowTitle(f"YOLO FORGE - {root_path}")
             
